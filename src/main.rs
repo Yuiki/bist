@@ -1,3 +1,6 @@
+use bist::spv::SPV;
+
 fn main() {
-    println!("Hello, world!");
+    let spv = SPV {};
+    spv.start();
 }
