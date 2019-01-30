@@ -1,11 +1,20 @@
+#[allow(dead_code)]
+#[derive(Clone)]
 pub enum Network {
     Mainnet,
     Testnet,
 }
 
 impl Network {
+    pub fn magic_bytes(&self) -> u32 {
+        match self {
+            Network::Mainnet => 0xD9B4BEF9,
+            Network::Testnet => 0x0709110B
+        }
+    }
+
     pub fn dns_seeds(&self) -> Vec<&str> {
-        match *self {
+        match self {
             Network::Mainnet => vec![
                 "seed.bitcoin.sipa.be",
                 "dnsseed.bluematt.me",

@@ -1,3 +1,8 @@
 pub mod spv;
-mod network;
+pub mod network;
+
 mod dns;
+mod message;
+mod varint;
+mod varstr;
+mod netaddr;
