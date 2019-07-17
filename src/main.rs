@@ -1,8 +1,6 @@
-use bist::spv::SPV;
-
-use bist::network::Network;
+use bist::key;
 
 fn main() {
-    let spv = SPV { network: Network::Testnet };
-    spv.run();
+    let sk = key::read_or_generate_secret_key();
+    println!("{:?}", sk);
 }

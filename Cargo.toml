@@ -5,6 +5,11 @@ authors = ["Yuiki <10101661+Yuiki@users.noreply.github.com>"]
 edition = "2018"
 
 [dependencies]
-tokio = "0.1.15"
-bytes = "0.4.11"
+tokio = "0.1.22"
+bytes = "0.4.12"
 sha2 = "0.8.0"
+rust-base58 = "0.0.4"
+
+[dependencies.secp256k1]
+version = "0.14.0"
+features = [ "rand" ]
