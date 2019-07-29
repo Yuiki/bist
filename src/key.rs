@@ -1,7 +1,8 @@
 extern crate secp256k1;
 
-use secp256k1::{Secp256k1, rand::rngs::OsRng, SecretKey};
+use secp256k1::{Secp256k1, rand::rngs::OsRng, SecretKey, PublicKey};
 use sha2::{Sha256, Digest};
+use ripemd160::{Ripemd160};
 use rust_base58::{ToBase58, FromBase58};
 use std::fs::File;
 use std::io::{Write};
@@ -9,14 +10,27 @@ use std::fs;
 
 static KEY_FILENAME: &'static str = "key";
 
-pub fn read_or_generate_secret_key() -> Vec<u8> {
+pub fn read_or_generate_keys() -> (SecretKey, PublicKey) {
     if let Ok(wif) = fs::read_to_string(KEY_FILENAME) {
-        decode_wif(&wif)
+    let sk = SecretKey::from_slice(&decode_wif(&wif)).unwrap();
+    let secp = Secp256k1::new();
+    let pk = PublicKey::from_secret_key(&secp, &sk);
+    (sk, pk)
     } else {
-        let sk = generate_secret_key();
+        let (sk, pk) = generate_keypair();
         save_secret_key(&sk);
-        sk[..].to_vec()
+        (sk, pk)
     }
+}
+
+pub fn address(pk: &PublicKey) -> String {
+    let mut pk_bytes = Vec::new();
+    pk_bytes.write_all(&pk.serialize()).unwrap();
+    let hashed_pk = hash160(&pk_bytes);
+    // 0xEF is the version byte (Testnet)
+    let mut v = vec![0x6F];
+    v.extend_from_slice(&hashed_pk);
+    base58check(&v)
 }
 
 fn save_secret_key(secret_key: &SecretKey) {
@@ -26,21 +40,25 @@ fn save_secret_key(secret_key: &SecretKey) {
     file.flush().unwrap();
 }
 
-fn generate_secret_key() -> SecretKey {
+fn generate_keypair() -> (SecretKey, PublicKey) {
     let secp = Secp256k1::new();
     let mut rng = OsRng::new().unwrap();
-    let (sk, _pk) = secp.generate_keypair(&mut rng);
-    sk
+    secp.generate_keypair(&mut rng)
 }
 
 fn encode_to_wif(secret_key: &SecretKey) -> String {
     // 0xEF is the version byte (Testnet)
-    let mut raw_addr = vec![0xEF];
-    raw_addr.extend_from_slice(&secret_key[..].to_vec());
-    let result = hash256(&raw_addr);
+    let mut wif = vec![0xEF];
+    wif.extend_from_slice(&secret_key[..].to_vec());
+    base58check(&wif)
+}
+
+fn base58check(input: &Vec<u8>) -> String {
+    let mut input = input.clone();
+    let result = hash256(&input);
     let checksum = result.get(0..4).unwrap();
-    raw_addr.extend_from_slice(checksum);
-    raw_addr[..].to_base58()
+    input.extend_from_slice(checksum);
+    input[..].to_base58()
 }
 
 // TODO: add error handling
@@ -57,6 +75,17 @@ fn hash256(input: &[u8]) -> Vec<u8> {
     let result = hasher.result();
 
     let mut hasher = Sha256::default();
+    hasher.input(&result);
+    hasher.result().to_vec()
+}
+
+// apply sha256 and ripemd160
+fn hash160(input: &[u8]) -> Vec<u8> {
+    let mut hasher = Sha256::default();
+    hasher.input(input);
+    let result = hasher.result();
+
+    let mut hasher = Ripemd160::default();
     hasher.input(&result);
     hasher.result().to_vec()
 }

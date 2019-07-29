@@ -9,6 +9,7 @@ tokio = "0.1.22"
 bytes = "0.4.12"
 sha2 = "0.8.0"
 rust-base58 = "0.0.4"
+ripemd160 = "0.8.0"
 
 [dependencies.secp256k1]
 version = "0.14.0"
