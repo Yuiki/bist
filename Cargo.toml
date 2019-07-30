@@ -10,6 +10,8 @@ bytes = "0.4.12"
 sha2 = "0.8.0"
 rust-base58 = "0.0.4"
 ripemd160 = "0.8.0"
+arrayvec = "0.4.11"
+hex = "0.3.2"
 
 [dependencies.secp256k1]
 version = "0.14.0"

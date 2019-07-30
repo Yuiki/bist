@@ -12,10 +12,9 @@ impl Encoder for VarStrCodec {
     type Error = Error;
 
     fn encode(&mut self, item: Self::Item, dst: &mut BytesMut) -> Result<(), Self::Error> {
-        let mut buf: Vec<u8> = Vec::new();
-        VarIntCodec.encode(item.len(), dst).unwrap();
-        buf.extend(item.bytes());
-        dst.extend(buf);
+        let decoded = hex::decode(item).unwrap();
+        VarIntCodec.encode(decoded.len(), dst).unwrap();
+        dst.extend(decoded);
 
         Ok(())
     }

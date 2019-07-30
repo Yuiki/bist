@@ -2,8 +2,7 @@ use std::clone::Clone;
 use std::io::Error;
 use std::net::SocketAddr;
 
-use bytes::BufMut;
-use bytes::BytesMut;
+use bytes::{BufMut, BytesMut};
 use tokio::codec::Encoder;
 
 pub struct NetAddr {
@@ -17,9 +16,13 @@ impl NetAddr {
         let services = services.clone();
         let (addr, port) = match addr {
             SocketAddr::V4(addr) => (addr.ip().to_ipv6_mapped().segments(), addr.port()),
-            SocketAddr::V6(addr) => (addr.ip().segments(), addr.port())
+            SocketAddr::V6(addr) => (addr.ip().segments(), addr.port()),
         };
-        NetAddr { address: addr, port, services }
+        NetAddr {
+            address: addr,
+            port,
+            services,
+        }
     }
 }
 

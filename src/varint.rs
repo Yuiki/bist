@@ -1,7 +1,6 @@
 use std::io::Error;
 
-use bytes::BufMut;
-use bytes::BytesMut;
+use bytes::{BufMut, BytesMut};
 use tokio::codec::Encoder;
 
 pub struct VarIntCodec;

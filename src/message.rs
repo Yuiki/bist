@@ -13,19 +13,19 @@ use crate::network::Network;
 use crate::varstr::VarStrCodec;
 
 pub enum Message {
-    Version(VersionMessage)
+    Version(VersionMessage),
 }
 
 impl Message {
     pub fn name(&self) -> &str {
         match self {
-            Message::Version(_) => "version"
+            Message::Version(_) => "version",
         }
     }
 }
 
 pub struct MessageCodec {
-    pub network: Network
+    pub network: Network,
 }
 
 impl Encoder for MessageCodec {
@@ -48,17 +48,23 @@ impl Encoder for MessageCodec {
                 payload.put_i64_le(fields.timestamp);
 
                 let mut encoded_addr_recv = BytesMut::new();
-                NetAddrCodec.encode(fields.addr_recv, &mut encoded_addr_recv).unwrap();
+                NetAddrCodec
+                    .encode(fields.addr_recv, &mut encoded_addr_recv)
+                    .unwrap();
                 payload.extend(encoded_addr_recv);
 
                 let mut encoded_addr_from = BytesMut::new();
-                NetAddrCodec.encode(fields.addr_from, &mut encoded_addr_from).unwrap();
+                NetAddrCodec
+                    .encode(fields.addr_from, &mut encoded_addr_from)
+                    .unwrap();
                 payload.extend(encoded_addr_from);
 
                 payload.put_u64_le(fields.nonce);
 
                 let mut encoded_ua = BytesMut::new();
-                VarStrCodec.encode(fields.user_agent, &mut encoded_ua).unwrap();
+                VarStrCodec
+                    .encode(fields.user_agent, &mut encoded_ua)
+                    .unwrap();
                 payload.extend(encoded_ua);
 
                 payload.put_i32_le(fields.start_height);
@@ -99,9 +105,7 @@ impl MessageCodec {
         let mut array = [0; 12];
         for i in 0..12 {
             match bytes.next() {
-                Some(b) => {
-                    array[i] = b
-                }
+                Some(b) => array[i] = b,
                 None => {
                     // zero-padding
                     array[i] = 0;
@@ -126,7 +130,10 @@ pub struct VersionMessage {
 
 impl VersionMessage {
     pub fn new(address: &SocketAddr) -> Message {
-        let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
 
         Message::Version(VersionMessage {
             version: 70015,
