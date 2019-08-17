@@ -5,6 +5,7 @@ use std::net::SocketAddr;
 use bytes::{BufMut, BytesMut};
 use tokio::codec::Encoder;
 
+#[derive(Debug)]
 pub struct NetAddr {
     pub services: u64,
     pub address: [u16; 8],

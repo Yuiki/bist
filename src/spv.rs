@@ -1,5 +1,6 @@
 use std::net::SocketAddr;
 
+use futures::stream::Stream;
 use tokio::codec::Decoder;
 use tokio::net::TcpStream;
 use tokio::prelude::future::Future;
@@ -7,7 +8,7 @@ use tokio::prelude::Async;
 use tokio::prelude::Sink;
 
 use crate::dns;
-use crate::message::{MessageCodec, VersionMessage};
+use crate::message::{Message, MessageCodec, VersionMessage};
 use crate::network::Network;
 
 pub struct SPV {
@@ -32,8 +33,6 @@ impl SPV {
         let peers = dns::peers(&self.network);
 
         let peer = peers.first().unwrap();
-        // for testing
-        let peer = &"127.0.0.1:6142".parse::<SocketAddr>().unwrap();
         self.connect(peer);
 
         Ok(Async::Ready(()))
@@ -48,9 +47,24 @@ impl SPV {
                 // handshake
                 let version = VersionMessage::new(&addr);
                 let framed = MessageCodec { network }.framed(stream);
-                framed.send(version).then(|r| Ok(()))
+                framed
+                    .send(version)
+                    .map(|framed| framed.into_future())
+                    .and_then(|future| future.map_err(|(e, _)| e))
+                    .and_then(|(_msg, framed)| {
+                        framed
+                            .send(Message::VerAck)
+                            .map(|framed| framed.into_future())
+                            .and_then(|framed| framed.map_err(|(e, _)| e))
+                            .and_then(|(_msg, framed)| {
+                                framed.for_each(|msg| {
+                                    println!("{:?}", msg);
+                                    Ok(())
+                                })
+                            })
+                    })
             })
-            .map_err(|e| {});
+            .map_err(|_| {});
         tokio::spawn(client);
     }
 }

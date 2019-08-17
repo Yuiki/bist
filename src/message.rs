@@ -3,8 +3,8 @@ use std::net::SocketAddr;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
-use bytes::BufMut;
-use bytes::BytesMut;
+use byteorder::{ByteOrder, LittleEndian};
+use bytes::{BufMut, BytesMut};
 use sha2::{Digest, Sha256};
 use tokio::codec::{Decoder, Encoder};
 
@@ -12,14 +12,19 @@ use crate::netaddr::{NetAddr, NetAddrCodec};
 use crate::network::Network;
 use crate::varstr::VarStrCodec;
 
+#[derive(Debug)]
 pub enum Message {
     Version(VersionMessage),
+    VerAck,
+    Unknown,
 }
 
 impl Message {
     pub fn name(&self) -> &str {
         match self {
             Message::Version(_) => "version",
+            Message::VerAck => "verack",
+            Message::Unknown => "unknown",
         }
     }
 }
@@ -71,6 +76,8 @@ impl Encoder for MessageCodec {
                 payload.put_u8(if fields.relay { 1 } else { 0 });
                 payload
             }
+            Message::VerAck => Vec::new(),
+            Message::Unknown => panic!(),
         };
 
         buf.put_u32_le(payload.len() as u32);
@@ -95,7 +102,16 @@ impl Decoder for MessageCodec {
     type Error = Error;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        unimplemented!()
+        if src.len() < 24 {
+            return Ok(None);
+        };
+        let _magic = src.split_to(4);
+        let name = src.split_to(12);
+        println!("{:?}", name);
+        let payload_len = LittleEndian::read_u32(&src.split_to(4)) as usize;
+        let _payload_checksum = src.split_to(4);
+        let payload = src.split_to(payload_len);
+        Ok(Some(Message::Unknown))
     }
 }
 
@@ -116,6 +132,7 @@ impl MessageCodec {
     }
 }
 
+#[derive(Debug)]
 pub struct VersionMessage {
     pub version: i32,
     pub services: u64,
@@ -142,7 +159,7 @@ impl VersionMessage {
             addr_recv: NetAddr::new(address, &0),
             addr_from: NetAddr::new(address, &0),
             nonce: 0,
-            user_agent: "bist".to_string(),
+            user_agent: hex::encode("bist".to_string()),
             start_height: 0,
             relay: false,
         })

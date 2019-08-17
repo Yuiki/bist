@@ -1,9 +1,11 @@
+use rand::seq::SliceRandom;
 use std::net::{SocketAddr, ToSocketAddrs};
 
 use crate::network::Network;
 
 pub fn peers(network: &Network) -> Vec<SocketAddr> {
-    network
+        let mut rng = rand::thread_rng();
+    let mut v : Vec<SocketAddr> = network
         .dns_seeds()
         .iter()
         .flat_map(|seed| {
@@ -11,5 +13,7 @@ pub fn peers(network: &Network) -> Vec<SocketAddr> {
                 .to_socket_addrs()
                 .unwrap_or_else(|_| vec![].into_iter())
         })
-        .collect()
+        .collect();
+    v.shuffle(&mut rng);
+    v
 }

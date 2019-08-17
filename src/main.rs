@@ -1,6 +1,8 @@
 use bist::address::encode_to_address;
 use bist::key;
 use bist::transaction::Transaction;
+use bist::spv::SPV;
+use bist::network::Network;
 
 fn main() {
     let (sk, pk) = key::read_or_generate_keys();
@@ -15,4 +17,9 @@ fn main() {
     let tx = Transaction::with_signature(txid, idx, pk_script, to, value, sk, pk);
 
     println!("{}", tx.raw_tx());
+
+    let spv = SPV {
+        network: Network::Testnet,
+    };
+    spv.run();
 }
