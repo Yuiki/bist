@@ -10,6 +10,7 @@ use tokio::codec::{Decoder, Encoder};
 
 use crate::netaddr::{NetAddr, NetAddrCodec};
 use crate::network::Network;
+use crate::transaction::{Transaction, TransactionCodec};
 use crate::varint::VarIntCodec;
 use crate::varstr::VarStrCodec;
 
@@ -18,6 +19,7 @@ pub enum Message {
     Version(VersionMessage),
     VerAck,
     Inv(InvMessage),
+    Tx(Transaction),
     Unknown,
 }
 
@@ -27,6 +29,7 @@ impl Message {
             Message::Version(_) => "version",
             Message::VerAck => "verack",
             Message::Inv(_) => "inv",
+            Message::Tx(_) => "tx",
             Message::Unknown => "unknown",
         }
     }
@@ -87,6 +90,13 @@ impl Encoder for MessageCodec {
                 for item in fields.invs {
                     InventoryCodec.encode(item, &mut payload).unwrap();
                 }
+
+                payload.to_vec()
+            }
+            Message::Tx(transaction) => {
+                let mut payload = BytesMut::new();
+
+                TransactionCodec.encode(transaction, &mut payload).unwrap();
 
                 payload.to_vec()
             }
