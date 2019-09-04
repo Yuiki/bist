@@ -10,12 +10,14 @@ use tokio::codec::{Decoder, Encoder};
 
 use crate::netaddr::{NetAddr, NetAddrCodec};
 use crate::network::Network;
+use crate::varint::VarIntCodec;
 use crate::varstr::VarStrCodec;
 
 #[derive(Debug)]
 pub enum Message {
     Version(VersionMessage),
     VerAck,
+    Inv(InvMessage),
     Unknown,
 }
 
@@ -24,6 +26,7 @@ impl Message {
         match self {
             Message::Version(_) => "version",
             Message::VerAck => "verack",
+            Message::Inv(_) => "inv",
             Message::Unknown => "unknown",
         }
     }
@@ -77,6 +80,16 @@ impl Encoder for MessageCodec {
                 payload
             }
             Message::VerAck => Vec::new(),
+            Message::Inv(fields) => {
+                let mut payload = BytesMut::new();
+
+                VarIntCodec.encode(fields.invs.len(), &mut payload).unwrap();
+                for item in fields.invs {
+                    InventoryCodec.encode(item, &mut payload).unwrap();
+                }
+
+                payload.to_vec()
+            }
             Message::Unknown => panic!(),
         };
 
@@ -163,5 +176,32 @@ impl VersionMessage {
             start_height: 0,
             relay: false,
         })
+    }
+}
+
+#[derive(Debug)]
+pub struct InvMessage {
+    invs: Vec<Inventory>,
+}
+
+#[derive(Debug)]
+pub struct Inventory {
+    pub inv_type: u32,
+    pub hash: String,
+}
+
+pub struct InventoryCodec;
+
+impl Encoder for InventoryCodec {
+    type Item = Inventory;
+    type Error = Error;
+
+    fn encode(&mut self, item: Self::Item, dst: &mut BytesMut) -> Result<(), Self::Error> {
+        dst.put_u32_le(item.inv_type);
+        let mut encoded_hash = BytesMut::new();
+        VarStrCodec.encode(item.hash, &mut encoded_hash).unwrap();
+        dst.extend(encoded_hash);
+
+        Ok(())
     }
 }
