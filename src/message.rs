@@ -94,8 +94,7 @@ impl Encoder for MessageCodec {
                 payload.to_vec()
             }
             Message::Tx(transaction) => {
-                let mut payload = BytesMut::new();
-
+                let mut payload = BytesMut::with_capacity(1024);
                 TransactionCodec.encode(transaction, &mut payload).unwrap();
 
                 payload.to_vec()
@@ -130,7 +129,6 @@ impl Decoder for MessageCodec {
         };
         let _magic = src.split_to(4);
         let name = src.split_to(12);
-        println!("{:?}", name);
         let payload_len = LittleEndian::read_u32(&src.split_to(4)) as usize;
         let _payload_checksum = src.split_to(4);
         let payload = src.split_to(payload_len);
