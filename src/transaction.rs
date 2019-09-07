@@ -14,7 +14,7 @@ use crate::script::Opcode;
 use crate::varint::VarIntCodec;
 use crate::varstr::VarStrCodec;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Transaction {
     version: i32,
     tx_in: TxIn,
@@ -118,7 +118,7 @@ impl Encoder for TransactionCodec {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct TxIn {
     previous_output: OutPoint,
     signature_script: String,
@@ -139,7 +139,7 @@ impl Encoder for TxInCodec {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct OutPoint {
     hash: ArrayVec<[u8; 32]>,
     index: u32,
@@ -158,7 +158,7 @@ impl Encoder for OutPointCodec {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct TxOut {
     value: i64,
     pk_script: String,
