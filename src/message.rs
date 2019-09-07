@@ -5,6 +5,8 @@ use std::time::UNIX_EPOCH;
 
 use byteorder::{ByteOrder, LittleEndian};
 use bytes::{BufMut, BytesMut};
+use murmur3::murmur3_32;
+use rand::prelude::*;
 use sha2::{Digest, Sha256};
 use tokio::codec::{Decoder, Encoder};
 
@@ -20,6 +22,7 @@ pub enum Message {
     VerAck,
     Inv(InvMessage),
     Tx(Transaction),
+    Filterload(FilterloadMessage),
     Unknown,
 }
 
@@ -30,6 +33,7 @@ impl Message {
             Message::VerAck => "verack",
             Message::Inv(_) => "inv",
             Message::Tx(_) => "tx",
+            Message::Filterload(_) => "filterload",
             Message::Unknown => "unknown",
         }
     }
@@ -97,6 +101,19 @@ impl Encoder for MessageCodec {
                 let mut payload = BytesMut::with_capacity(1024);
                 TransactionCodec.encode(transaction, &mut payload).unwrap();
 
+                payload.to_vec()
+            }
+            Message::Filterload(fields) => {
+                let mut payload = BytesMut::with_capacity(1024);
+                VarIntCodec
+                    .encode(fields.filter.len(), &mut payload)
+                    .unwrap();
+                for byte in fields.filter {
+                    payload.put_u8(byte);
+                }
+                payload.put_u32_le(fields.n_hash_funcs);
+                payload.put_u32_le(fields.n_tweak);
+                payload.put_u8(fields.n_flags);
                 payload.to_vec()
             }
             Message::Unknown => panic!(),
@@ -211,5 +228,34 @@ impl Encoder for InventoryCodec {
         dst.extend(encoded_hash);
 
         Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub struct FilterloadMessage {
+    pub filter: Vec<u8>,
+    pub n_hash_funcs: u32,
+    pub n_tweak: u32,
+    pub n_flags: u8,
+}
+
+impl FilterloadMessage {
+    pub fn new(data: Vec<u8>) -> Message {
+        let n_hash_funcs = 10;
+        let mut rng = rand::thread_rng();
+        let n_tweak: u32 = rng.gen();
+
+        let mut filter: [u8; 128] = [0; 128];
+        for i in 0..n_tweak {
+            let idx = murmur3_32(&mut &data[..], n_hash_funcs * 0xFBA4C795 + i);
+            filter[(idx >> 3) as usize] |= (1 << (7 & idx)) as u8;
+        }
+
+        Message::Filterload(FilterloadMessage {
+            filter: filter.to_vec(),
+            n_hash_funcs: 10,
+            n_tweak: n_tweak,
+            n_flags: 1,
+        })
     }
 }
