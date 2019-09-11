@@ -5,6 +5,7 @@ use std::time::UNIX_EPOCH;
 
 use byteorder::{ByteOrder, LittleEndian};
 use bytes::{BufMut, BytesMut};
+use hex;
 use murmur3::murmur3_32;
 use rand::prelude::*;
 use sha2::{Digest, Sha256};
@@ -23,6 +24,7 @@ pub enum Message {
     Inv(InvMessage),
     Tx(Transaction),
     Filterload(FilterloadMessage),
+    GetBlocks(GetBlocksMessage),
     Unknown,
 }
 
@@ -34,6 +36,7 @@ impl Message {
             Message::Inv(_) => "inv",
             Message::Tx(_) => "tx",
             Message::Filterload(_) => "filterload",
+            Message::GetBlocks(_) => "getblocks",
             Message::Unknown => "unknown",
         }
     }
@@ -114,6 +117,18 @@ impl Encoder for MessageCodec {
                 payload.put_u32_le(fields.n_hash_funcs);
                 payload.put_u32_le(fields.n_tweak);
                 payload.put_u8(fields.n_flags);
+                payload.to_vec()
+            }
+            Message::GetBlocks(fields) => {
+                let mut payload = BytesMut::with_capacity(1024);
+                payload.put_u32_le(fields.version);
+                VarIntCodec
+                    .encode(fields.block_locator_hashes.len(), &mut payload)
+                    .unwrap();
+                for hash in fields.block_locator_hashes {
+                    dst.extend(&hash);
+                }
+                payload.extend(&fields.hash_stop);
                 payload.to_vec()
             }
             Message::Unknown => panic!(),
@@ -258,4 +273,11 @@ impl FilterloadMessage {
             n_flags: 1,
         })
     }
+}
+
+#[derive(Debug)]
+pub struct GetBlocksMessage {
+    version: u32,
+    block_locator_hashes: Vec<[u8; 32]>,
+    hash_stop: [u8; 32],
 }
