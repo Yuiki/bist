@@ -26,6 +26,7 @@ pub enum Message {
     Filterload(FilterloadMessage),
     GetBlocks(GetBlocksMessage),
     GetData(GetDataMessage),
+    MerkleBlock(MerkleBlockMessage),
     Unknown,
 }
 
@@ -39,6 +40,7 @@ impl Message {
             Message::Filterload(_) => "filterload",
             Message::GetBlocks(_) => "getblocks",
             Message::GetData(_) => "getdata",
+            Message::MerkleBlock(_) => "merkleblock",
             Message::Unknown => "unknown",
         }
     }
@@ -143,7 +145,7 @@ impl Encoder for MessageCodec {
 
                 payload.to_vec()
             }
-            Message::Unknown => panic!(),
+            Message::MerkleBlock(_) | Message::Unknown => panic!(),
         };
 
         buf.put_u32_le(payload.len() as u32);
@@ -297,4 +299,17 @@ pub struct GetBlocksMessage {
 #[derive(Debug)]
 pub struct GetDataMessage {
     invs: Vec<Inventory>,
+}
+
+#[derive(Debug)]
+pub struct MerkleBlockMessage {
+    version: i32,
+    prev_block: [u8; 32],
+    merkle_root: [u8; 32],
+    timestamp: u32,
+    bits: u32,
+    nonce: u32,
+    total_transactions: u32,
+    hashes: Vec<[u8; 32]>,
+    flags: Vec<u8>,
 }
