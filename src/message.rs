@@ -25,6 +25,7 @@ pub enum Message {
     Tx(Transaction),
     Filterload(FilterloadMessage),
     GetBlocks(GetBlocksMessage),
+    GetData(GetDataMessage),
     Unknown,
 }
 
@@ -37,6 +38,7 @@ impl Message {
             Message::Tx(_) => "tx",
             Message::Filterload(_) => "filterload",
             Message::GetBlocks(_) => "getblocks",
+            Message::GetData(_) => "getdata",
             Message::Unknown => "unknown",
         }
     }
@@ -129,6 +131,16 @@ impl Encoder for MessageCodec {
                     dst.extend(&hash);
                 }
                 payload.extend(&fields.hash_stop);
+                payload.to_vec()
+            }
+            Message::GetData(fields) => {
+                let mut payload = BytesMut::new();
+
+                VarIntCodec.encode(fields.invs.len(), &mut payload).unwrap();
+                for item in fields.invs {
+                    InventoryCodec.encode(item, &mut payload).unwrap();
+                }
+
                 payload.to_vec()
             }
             Message::Unknown => panic!(),
@@ -280,4 +292,9 @@ pub struct GetBlocksMessage {
     version: u32,
     block_locator_hashes: Vec<[u8; 32]>,
     hash_stop: [u8; 32],
+}
+
+#[derive(Debug)]
+pub struct GetDataMessage {
+    invs: Vec<Inventory>,
 }
