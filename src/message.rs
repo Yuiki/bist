@@ -130,7 +130,7 @@ impl Encoder for MessageCodec {
                     .encode(fields.block_locator_hashes.len(), &mut payload)
                     .unwrap();
                 for hash in fields.block_locator_hashes {
-                    dst.extend(&hash);
+                    payload.extend(&hash);
                 }
                 payload.extend(&fields.hash_stop);
                 payload.to_vec()
