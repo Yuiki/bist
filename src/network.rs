@@ -3,6 +3,7 @@
 pub enum Network {
     Mainnet,
     Testnet,
+    Regtest,
 }
 
 impl Network {
@@ -10,6 +11,7 @@ impl Network {
         match self {
             Network::Mainnet => 0xD9B4BEF9,
             Network::Testnet => 0x0709110B,
+            Network::Regtest => 0xDAB5BFFA,
         }
     }
 
@@ -33,6 +35,7 @@ impl Network {
                 "testnet-seed.bluematt.me",
                 "bitcoin-testnet.bloqseeds.net",
             ],
+            Network::Regtest => vec![]
         }
     }
 }

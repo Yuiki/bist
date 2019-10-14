@@ -3,7 +3,7 @@ use bist::spv::SPV;
 
 fn main() {
     let spv = SPV {
-        network: Network::Testnet,
+        network: Network::Regtest,
     };
     spv.run();
 }
