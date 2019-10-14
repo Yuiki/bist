@@ -79,11 +79,16 @@ impl SPV {
                                     }
                                     Ok(())
                                 }));
-                                stream.for_each(|msg| Ok(()))
+                                stream.for_each(|msg| {
+                                    println!("{:?}", msg);
+                                    Ok(())
                             })
                     })
             })
-            .map_err(|_| {});
+            })
+            .map_err(|e| {
+                println!("{}", e);
+            });
         tokio::spawn(client);
     }
 }
