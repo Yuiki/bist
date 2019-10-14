@@ -38,8 +38,8 @@ impl SPV {
 
     fn start(&self) -> Result<Async<()>, ()> {
         let peers = dns::peers(&self.network);
-        let peer = peers.first().unwrap();
-
+        // let peer = peers.first().unwrap();
+        let peer = &"127.0.0.1:18444".parse::<SocketAddr>().unwrap();
         let (stdin_tx, stdin_rx) = mpsc::channel(0);
         thread::spawn(|| read_stdin(stdin_tx));
         let stdin_rx = stdin_rx.map_err(|_| panic!());
