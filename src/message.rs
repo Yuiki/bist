@@ -270,13 +270,16 @@ pub struct FilterloadMessage {
 
 impl FilterloadMessage {
     pub fn new(data: Vec<u8>) -> Message {
-        let n_hash_funcs = 10;
+        let n_hash_funcs: u32 = 10;
         let mut rng = rand::thread_rng();
         let n_tweak: u32 = rng.gen();
 
         let mut filter: [u8; 128] = [0; 128];
-        for i in 0..n_tweak {
-            let idx = murmur3_32(&mut &data[..], n_hash_funcs * 0xFBA4C795 + i);
+        for i in 0..n_hash_funcs {
+            let idx = murmur3_32(
+                &mut &data[..],
+                (0xFBA4C795 as u32).wrapping_mul(i).wrapping_add(n_tweak),
+            ) % ((filter.len() as u32) * 8);
             filter[(idx >> 3) as usize] |= (1 << (7 & idx)) as u8;
         }
 
