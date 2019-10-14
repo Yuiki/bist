@@ -295,9 +295,9 @@ impl FilterloadMessage {
 
 #[derive(Debug)]
 pub struct GetBlocksMessage {
-    version: u32,
-    block_locator_hashes: Vec<[u8; 32]>,
-    hash_stop: [u8; 32],
+    pub version: u32,
+    pub block_locator_hashes: Vec<[u8; 32]>,
+    pub hash_stop: [u8; 32],
 }
 
 #[derive(Debug)]
