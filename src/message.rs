@@ -221,7 +221,7 @@ impl VersionMessage {
 
         Message::Version(VersionMessage {
             version: 70015,
-            services: 0,
+            services: 4,
             timestamp,
             addr_recv: NetAddr::new(address, &0),
             addr_from: NetAddr::new(address, &0),
