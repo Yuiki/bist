@@ -174,12 +174,24 @@ impl Decoder for MessageCodec {
             return Ok(None);
         };
         let _magic = src.split_to(4);
-        let name = src.split_to(12);
+        let name = String::from_utf8(src.split_to(12).to_vec()).unwrap();
+        let name = name.trim_matches(char::from(0));
         println!("{:?}", name);
         let payload_len = LittleEndian::read_u32(&src.split_to(4)) as usize;
         let _payload_checksum = src.split_to(4);
-        let payload = src.split_to(payload_len);
-        Ok(Some(Message::Unknown))
+        let mut payload = src.split_to(payload_len);
+        println!("{:?}", payload);
+        let msg = match name {
+            "inv" => {
+                let len = VarIntCodec.decode(&mut payload).unwrap().unwrap();
+                let invs = (0..len)
+                    .map(|_| InventoryCodec.decode(&mut payload).unwrap().unwrap())
+                    .collect();
+                Message::Inv(InvMessage { invs: invs })
+            }
+            _ => Message::Unknown,
+        };
+        Ok(Some(msg))
     }
 }
 
@@ -242,7 +254,7 @@ pub struct InvMessage {
 #[derive(Debug)]
 pub struct Inventory {
     pub inv_type: u32,
-    pub hash: String,
+    pub hash: [u8; 32],
 }
 
 pub struct InventoryCodec;
@@ -253,11 +265,25 @@ impl Encoder for InventoryCodec {
 
     fn encode(&mut self, item: Self::Item, dst: &mut BytesMut) -> Result<(), Self::Error> {
         dst.put_u32_le(item.inv_type);
-        let mut encoded_hash = BytesMut::new();
-        VarStrCodec.encode(item.hash, &mut encoded_hash).unwrap();
-        dst.extend(encoded_hash);
+        dst.extend(&item.hash);
 
         Ok(())
+    }
+}
+
+impl Decoder for InventoryCodec {
+    type Item = Inventory;
+    type Error = Error;
+
+    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+        let inv_type = LittleEndian::read_u32(&src.split_to(std::mem::size_of::<u32>()));
+        let mut hash = [0; 32];
+        hash.copy_from_slice(&src.split_to(32)[..]);
+        let inv = Inventory {
+            inv_type: inv_type,
+            hash: hash,
+        };
+        Ok(Some(inv))
     }
 }
 
