@@ -136,7 +136,7 @@ impl Encoder for MessageCodec {
                 payload.to_vec()
             }
             Message::GetData(fields) => {
-                let mut payload = BytesMut::new();
+                let mut payload = BytesMut::with_capacity(1024);
 
                 VarIntCodec.encode(fields.invs.len(), &mut payload).unwrap();
                 for item in fields.invs {
@@ -248,7 +248,7 @@ impl VersionMessage {
 
 #[derive(Debug)]
 pub struct InvMessage {
-    invs: Vec<Inventory>,
+    pub invs: Vec<Inventory>,
 }
 
 #[derive(Debug)]
@@ -328,7 +328,7 @@ pub struct GetBlocksMessage {
 
 #[derive(Debug)]
 pub struct GetDataMessage {
-    invs: Vec<Inventory>,
+    pub invs: Vec<Inventory>,
 }
 
 #[derive(Debug)]

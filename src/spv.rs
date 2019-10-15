@@ -16,7 +16,10 @@ use crate::address::encode_to_address;
 use crate::dns;
 use crate::hash::hash160;
 use crate::key;
-use crate::message::{FilterloadMessage, GetBlocksMessage, Message, MessageCodec, VersionMessage};
+use crate::message::{
+    FilterloadMessage, GetBlocksMessage, GetDataMessage, Inventory, Message, MessageCodec,
+    VersionMessage,
+};
 use crate::network::Network;
 use crate::transaction::Transaction;
 
@@ -42,11 +45,12 @@ impl SPV {
         let peers = dns::peers(&self.network);
         // let peer = peers.first().unwrap();
         let peer = &"127.0.0.1:18444".parse::<SocketAddr>().unwrap();
-        let (stdin_tx, stdin_rx) = mpsc::channel(0);
-        thread::spawn(|| read_stdin(stdin_tx));
+        let (stdin_tx, stdin_rx) = mpsc::unbounded();
+        let tmp = stdin_tx.clone();
+        thread::spawn(|| read_stdin(tmp));
         let stdin_rx = stdin_rx.map_err(|_| panic!());
 
-        self.connect(&peer, Box::new(stdin_rx));
+        self.connect(&peer, Box::new(stdin_rx), stdin_tx);
 
         Ok(Async::Ready(()))
     }
@@ -55,6 +59,7 @@ impl SPV {
         &self,
         addr: &SocketAddr,
         stdin: Box<dyn Stream<Item = Message, Error = io::Error> + Send>,
+        stdin_tx: futures::sync::mpsc::UnboundedSender<Message>,
     ) {
         let addr = addr.clone();
         let network = self.network.clone();
@@ -68,12 +73,12 @@ impl SPV {
                     .send(version)
                     .map(|framed| framed.into_future())
                     .and_then(|future| future.map_err(|(e, _)| e))
-                    .and_then(|(_msg, framed)| {
+                    .and_then(move |(_msg, framed)| {
                         framed
                             .send(Message::VerAck)
                             .map(|framed| framed.into_future())
                             .and_then(|framed| framed.map_err(|(e, _)| e))
-                            .and_then(|(_msg, framed)| {
+                            .and_then(move |(_msg, framed)| {
                                 let (sink, stream) = framed.split();
                                 tokio::spawn(stdin.forward(sink).then(|result| {
                                     if let Err(e) = result {
@@ -81,8 +86,26 @@ impl SPV {
                                     }
                                     Ok(())
                                 }));
-                                stream.for_each(|msg| {
+                                stream.for_each(move |msg| {
                                     println!("{:?}", msg);
+                                    match msg {
+                                        Message::Inv(fields) => {
+                                            let filtered_invs: Vec<Inventory> = fields
+                                                .invs
+                                                .iter()
+                                                .filter(|inv| inv.inv_type == 2)
+                                                .map(|inv| Inventory {
+                                                    inv_type: 3,
+                                                    hash: inv.hash,
+                                                })
+                                                .collect();
+                                            let get_data = Message::GetData(GetDataMessage {
+                                                invs: filtered_invs,
+                                            });
+                                            stdin_tx.clone().wait().send(get_data);
+                                        }
+                                        _ => {}
+                                    }
                                     Ok(())
                                 })
                             })
@@ -95,7 +118,7 @@ impl SPV {
     }
 }
 
-fn read_stdin(mut tx: mpsc::Sender<Message>) {
+fn read_stdin(mut tx: mpsc::UnboundedSender<Message>) {
     let (sk, pk) = key::read_or_generate_keys();
     let commands = ["1. Show your address", "2. Send", "3. Show your balance"];
     loop {
