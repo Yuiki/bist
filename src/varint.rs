@@ -1,7 +1,8 @@
 use std::io::Error;
 
+use byteorder::{ByteOrder, LittleEndian};
 use bytes::{BufMut, BytesMut};
-use tokio::codec::Encoder;
+use tokio::codec::{Decoder, Encoder};
 
 pub struct VarIntCodec;
 
@@ -31,6 +32,32 @@ impl Encoder for VarIntCodec {
         dst.extend(buf);
 
         Ok(())
+    }
+}
+
+impl Decoder for VarIntCodec {
+    type Item = usize;
+    type Error = Error;
+
+    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+        let first = src.split_to(std::mem::size_of::<u8>());
+        let first = first.first().unwrap();
+        let value = match first {
+            0xFD => {
+                let bytes = src.split_to(std::mem::size_of::<u16>());
+                LittleEndian::read_u16(&bytes) as usize
+            }
+            0xFE => {
+                let bytes = src.split_to(std::mem::size_of::<u32>());
+                LittleEndian::read_u32(&bytes) as usize
+            }
+            0xFF => {
+                let bytes = src.split_to(std::mem::size_of::<u64>());
+                LittleEndian::read_u64(&bytes) as usize
+            }
+            _ => *first as usize,
+        };
+        Ok(Some(value))
     }
 }
 
