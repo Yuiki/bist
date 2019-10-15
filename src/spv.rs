@@ -4,6 +4,7 @@ use dialoguer::{Input, Select};
 use futures::stream::Stream;
 use futures::sync::mpsc;
 use std::io;
+use std::io::Write;
 use std::thread;
 use tokio::codec::Decoder;
 use tokio::net::TcpStream;
@@ -13,8 +14,9 @@ use tokio::prelude::Sink;
 
 use crate::address::encode_to_address;
 use crate::dns;
+use crate::hash::hash160;
 use crate::key;
-use crate::message::{Message, MessageCodec, VersionMessage};
+use crate::message::{FilterloadMessage, GetBlocksMessage, Message, MessageCodec, VersionMessage};
 use crate::network::Network;
 use crate::transaction::Transaction;
 
@@ -82,9 +84,9 @@ impl SPV {
                                 stream.for_each(|msg| {
                                     println!("{:?}", msg);
                                     Ok(())
+                                })
                             })
                     })
-            })
             })
             .map_err(|e| {
                 println!("{}", e);
@@ -95,7 +97,7 @@ impl SPV {
 
 fn read_stdin(mut tx: mpsc::Sender<Message>) {
     let (sk, pk) = key::read_or_generate_keys();
-    let commands = ["1. Show your address", "2. Send"];
+    let commands = ["1. Show your address", "2. Send", "3. Show your balance"];
     loop {
         let idx = Select::new()
             .with_prompt("Command?")
@@ -129,6 +131,38 @@ fn read_stdin(mut tx: mpsc::Sender<Message>) {
                 let transaction =
                     Transaction::with_signature(txid, idx, pk_script, to, value, sk, pk);
                 tx = match tx.send(Message::Tx(transaction)).wait() {
+                    Ok(tx) => tx,
+                    Err(_) => break,
+                };
+            }
+            2 => {
+                let mut pk_bytes = Vec::new();
+                pk_bytes.write_all(&pk.serialize()).unwrap();
+                let hashed_pk = hash160(&pk_bytes);
+                let filterload = FilterloadMessage::new(hashed_pk);
+                tx = match tx.send(filterload).wait() {
+                    Ok(tx) => tx,
+                    Err(_) => break,
+                };
+
+                let mut blockid_bytes = hex::decode(
+                    &"3967a9ab3a05c17fa3f103c04f3fedfac6f85d42895aab4368fcb59e639c564a",
+                )
+                .unwrap();
+                blockid_bytes.reverse();
+                let mut array = [0; 32];
+                let bytes = &blockid_bytes[..array.len()];
+                array.copy_from_slice(bytes);
+                let zero_hash: [u8; 32] = [
+                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                    0, 0, 0, 0, 0, 0,
+                ];
+                let getblocks = GetBlocksMessage {
+                    version: 70015,
+                    block_locator_hashes: vec![array],
+                    hash_stop: zero_hash,
+                };
+                tx = match tx.send(Message::GetBlocks(getblocks)).wait() {
                     Ok(tx) => tx,
                     Err(_) => break,
                 };
