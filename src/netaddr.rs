@@ -2,8 +2,9 @@ use std::clone::Clone;
 use std::io::Error;
 use std::net::SocketAddr;
 
+use byteorder::{ByteOrder, LittleEndian};
 use bytes::{BufMut, BytesMut};
-use tokio::codec::Encoder;
+use tokio::codec::{Decoder, Encoder};
 
 #[derive(Debug)]
 pub struct NetAddr {
@@ -43,5 +44,26 @@ impl Encoder for NetAddrCodec {
         dst.extend(buf);
 
         Ok(())
+    }
+}
+
+impl Decoder for NetAddrCodec {
+    type Item = NetAddr;
+    type Error = Error;
+
+    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+        let services = LittleEndian::read_u64(&src.split_to(std::mem::size_of::<u64>()));
+        let mut address = [0; 8];
+        for i in 0..8 {
+            address[i] = LittleEndian::read_u16(&src.split_to(std::mem::size_of::<u16>()));
+        }
+        let port = LittleEndian::read_u16(&src.split_to(std::mem::size_of::<u16>()));
+
+        let net_addr = NetAddr {
+            services: services,
+            address: address,
+            port: port,
+        };
+        Ok(Some(net_addr))
     }
 }

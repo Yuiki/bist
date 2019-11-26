@@ -63,35 +63,9 @@ impl Encoder for MessageCodec {
 
         let payload = match item {
             Message::Version(fields) => {
-                let mut payload: Vec<u8> = Vec::new();
-
-                payload.put_i32_le(fields.version);
-                payload.put_u64_le(fields.services);
-                payload.put_i64_le(fields.timestamp);
-
-                let mut encoded_addr_recv = BytesMut::new();
-                NetAddrCodec
-                    .encode(fields.addr_recv, &mut encoded_addr_recv)
-                    .unwrap();
-                payload.extend(encoded_addr_recv);
-
-                let mut encoded_addr_from = BytesMut::new();
-                NetAddrCodec
-                    .encode(fields.addr_from, &mut encoded_addr_from)
-                    .unwrap();
-                payload.extend(encoded_addr_from);
-
-                payload.put_u64_le(fields.nonce);
-
-                let mut encoded_ua = BytesMut::new();
-                VarStrCodec
-                    .encode(fields.user_agent, &mut encoded_ua)
-                    .unwrap();
-                payload.extend(encoded_ua);
-
-                payload.put_i32_le(fields.start_height);
-                payload.put_u8(if fields.relay { 1 } else { 0 });
-                payload
+                let mut payload = BytesMut::new();
+                VersionCodec.encode(fields, &mut payload).unwrap();
+                payload.to_vec()
             }
             Message::VerAck => Vec::new(),
             Message::Inv(fields) => {
@@ -173,21 +147,74 @@ impl Decoder for MessageCodec {
         if src.len() < 24 {
             return Ok(None);
         };
+        let payload_len = LittleEndian::read_u32(&src[16..20]);
+        if (src.len() as u32) < payload_len {
+            return Ok(None);
+        };
         let _magic = src.split_to(4);
         let name = String::from_utf8(src.split_to(12).to_vec()).unwrap();
         let name = name.trim_matches(char::from(0));
-        println!("{:?}", name);
         let payload_len = LittleEndian::read_u32(&src.split_to(4)) as usize;
         let _payload_checksum = src.split_to(4);
+        if src.len() < payload_len {
+            return Ok(None);
+        }
         let mut payload = src.split_to(payload_len);
-        println!("{:?}", payload);
         let msg = match name {
+            "version" => {
+                let fields = VersionCodec.decode(&mut payload).unwrap().unwrap();
+                Message::Version(fields)
+            }
+            "verack" => Message::VerAck,
             "inv" => {
                 let len = VarIntCodec.decode(&mut payload).unwrap().unwrap();
                 let invs = (0..len)
                     .map(|_| InventoryCodec.decode(&mut payload).unwrap().unwrap())
                     .collect();
                 Message::Inv(InvMessage { invs: invs })
+            }
+            "merkleblock" => {
+                let version = LittleEndian::read_i32(&payload.split_to(std::mem::size_of::<i32>()));
+                let mut prev_block = [0; 32];
+                prev_block.copy_from_slice(&payload.split_to(32)[..]);
+                let mut merkle_root = [0; 32];
+                merkle_root.copy_from_slice(&payload.split_to(32)[..]);
+                let timestamp =
+                    LittleEndian::read_u32(&payload.split_to(std::mem::size_of::<u32>()));
+                let bits = LittleEndian::read_u32(&payload.split_to(std::mem::size_of::<u32>()));
+                let nonce = LittleEndian::read_u32(&payload.split_to(std::mem::size_of::<u32>()));
+                let total_transactions =
+                    LittleEndian::read_u32(&payload.split_to(std::mem::size_of::<u32>()));
+                let hashes_len = VarIntCodec.decode(&mut payload).unwrap().unwrap();
+                let hashes: Vec<[u8; 32]> = (0..hashes_len)
+                    .map(|_| {
+                        let mut hash = [0; 32];
+                        hash.copy_from_slice(&payload.split_to(32)[..]);
+                        hash
+                    })
+                    .collect();
+                let flag_bytes = VarIntCodec.decode(&mut payload).unwrap().unwrap();
+                let flags: Vec<u8> = (0..flag_bytes)
+                    .map(|_| {
+                        let first = payload.split_to(std::mem::size_of::<u8>());
+                        *first.first().unwrap()
+                    })
+                    .collect();
+                Message::MerkleBlock(MerkleBlockMessage {
+                    version: version,
+                    prev_block: prev_block,
+                    merkle_root: merkle_root,
+                    timestamp: timestamp,
+                    bits: bits,
+                    nonce: nonce,
+                    total_transactions: total_transactions,
+                    hashes: hashes,
+                    flags: flags,
+                })
+            }
+            "tx" => {
+                let transaction = TransactionCodec.decode(&mut payload).unwrap().unwrap();
+                Message::Tx(transaction)
             }
             _ => Message::Unknown,
         };
@@ -243,6 +270,74 @@ impl VersionMessage {
             start_height: 0,
             relay: false,
         })
+    }
+}
+
+pub struct VersionCodec;
+
+impl Encoder for VersionCodec {
+    type Item = VersionMessage;
+    type Error = Error;
+
+    fn encode(&mut self, item: Self::Item, dst: &mut BytesMut) -> Result<(), Self::Error> {
+        dst.put_i32_le(item.version);
+        dst.put_u64_le(item.services);
+        dst.put_i64_le(item.timestamp);
+
+        let mut encoded_addr_recv = BytesMut::new();
+        NetAddrCodec
+            .encode(item.addr_recv, &mut encoded_addr_recv)
+            .unwrap();
+        dst.extend(encoded_addr_recv);
+
+        let mut encoded_addr_from = BytesMut::new();
+        NetAddrCodec
+            .encode(item.addr_from, &mut encoded_addr_from)
+            .unwrap();
+        dst.extend(encoded_addr_from);
+
+        dst.put_u64_le(item.nonce);
+
+        let mut encoded_ua = BytesMut::new();
+        VarStrCodec
+            .encode(item.user_agent, &mut encoded_ua)
+            .unwrap();
+        dst.extend(encoded_ua);
+
+        dst.put_i32_le(item.start_height);
+        dst.put_u8(if item.relay { 1 } else { 0 });
+
+        Ok(())
+    }
+}
+
+impl Decoder for VersionCodec {
+    type Item = VersionMessage;
+    type Error = Error;
+
+    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+        let version = LittleEndian::read_i32(&src.split_to(std::mem::size_of::<i32>()));
+        let services = LittleEndian::read_u64(&src.split_to(std::mem::size_of::<u64>()));
+        let timestamp = LittleEndian::read_i64(&src.split_to(std::mem::size_of::<i64>()));
+        let addr_recv = NetAddrCodec.decode(src).unwrap().unwrap();
+        let addr_from = NetAddrCodec.decode(src).unwrap().unwrap();
+        let nonce = LittleEndian::read_u64(&src.split_to(std::mem::size_of::<u64>()));
+        let user_agent = VarStrCodec.decode(src).unwrap().unwrap();
+        let start_height = LittleEndian::read_i32(&src.split_to(std::mem::size_of::<i32>()));
+        let relay = *src.first().unwrap() == 1;
+
+        let version = VersionMessage {
+            version: version,
+            services: services,
+            timestamp: timestamp,
+            addr_recv: addr_recv,
+            addr_from: addr_from,
+            nonce: nonce,
+            user_agent: user_agent,
+            start_height: start_height,
+            relay: relay,
+        };
+        Ok(Some(version))
     }
 }
 
@@ -333,13 +428,13 @@ pub struct GetDataMessage {
 
 #[derive(Debug)]
 pub struct MerkleBlockMessage {
-    version: i32,
-    prev_block: [u8; 32],
-    merkle_root: [u8; 32],
-    timestamp: u32,
-    bits: u32,
-    nonce: u32,
-    total_transactions: u32,
-    hashes: Vec<[u8; 32]>,
-    flags: Vec<u8>,
+    pub version: i32,
+    pub prev_block: [u8; 32],
+    pub merkle_root: [u8; 32],
+    pub timestamp: u32,
+    pub bits: u32,
+    pub nonce: u32,
+    pub total_transactions: u32,
+    pub hashes: Vec<[u8; 32]>,
+    pub flags: Vec<u8>,
 }

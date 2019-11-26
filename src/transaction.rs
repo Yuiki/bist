@@ -1,11 +1,10 @@
 use std::io::Error;
-use std::iter::FromIterator;
 
-use arrayvec::ArrayVec;
+use byteorder::{ByteOrder, LittleEndian};
 use bytes::{BufMut, BytesMut};
 use hex;
 use secp256k1::{PublicKey, SecretKey};
-use tokio::codec::Encoder;
+use tokio::codec::{Decoder, Encoder};
 
 use crate::address::decode_address;
 use crate::hash;
@@ -16,10 +15,10 @@ use crate::varstr::VarStrCodec;
 
 #[derive(Debug, Clone)]
 pub struct Transaction {
-    version: i32,
-    tx_in: TxIn,
-    tx_out: TxOut,
-    lock_time: i32,
+    pub version: i32,
+    pub tx_ins: Vec<TxIn>,
+    pub tx_outs: Vec<TxOut>,
+    pub lock_time: i32,
 }
 
 impl Transaction {
@@ -62,8 +61,11 @@ impl Transaction {
     ) -> Transaction {
         let mut txid_bytes = hex::decode(&txid).unwrap();
         txid_bytes.reverse();
+        let mut hash = [0; 32];
+        let bytes = &txid_bytes[..hash.len()];
+        hash.copy_from_slice(bytes);
         let out_point = OutPoint {
-            hash: ArrayVec::from_iter(txid_bytes.into_iter()),
+            hash: hash,
             index: idx,
         };
         let tx_in = TxIn {
@@ -87,9 +89,9 @@ impl Transaction {
         };
 
         Transaction {
-            version: 0,
-            tx_in: tx_in,
-            tx_out: tx_out,
+            version: 1,
+            tx_ins: vec![tx_in],
+            tx_outs: vec![tx_out],
             lock_time: 0,
         }
     }
@@ -109,20 +111,52 @@ impl Encoder for TransactionCodec {
 
     fn encode(&mut self, item: Self::Item, dst: &mut BytesMut) -> Result<(), Self::Error> {
         dst.put_i32_le(item.version);
-        VarIntCodec.encode(1, dst).unwrap();
-        TxInCodec.encode(item.tx_in, dst).unwrap();
-        VarIntCodec.encode(1, dst).unwrap();
-        TxOutCodec.encode(item.tx_out, dst).unwrap();
+        VarIntCodec.encode(item.tx_ins.len(), dst).unwrap();
+        item.tx_ins.into_iter().for_each(|tx_in| {
+            TxInCodec.encode(tx_in, dst).unwrap();
+        });
+        VarIntCodec.encode(item.tx_outs.len(), dst).unwrap();
+        item.tx_outs.into_iter().for_each(|tx_out| {
+            TxOutCodec.encode(tx_out, dst).unwrap();
+        });
         dst.put_i32_le(item.lock_time);
         Ok(())
     }
 }
 
+impl Decoder for TransactionCodec {
+    type Item = Transaction;
+    type Error = Error;
+
+    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+        let version = LittleEndian::read_i32(&src.split_to(std::mem::size_of::<i32>()));
+        let tx_in_count = VarIntCodec.decode(src).unwrap().unwrap();
+        let tx_ins = (0..tx_in_count)
+            .map(|_| TxInCodec.decode(src).unwrap().unwrap())
+            .collect();
+
+        let tx_out_count = VarIntCodec.decode(src).unwrap().unwrap();
+        let tx_outs = (0..tx_out_count)
+            .map(|_| TxOutCodec.decode(src).unwrap().unwrap())
+            .collect();
+
+        let lock_time = LittleEndian::read_i32(&src.split_to(std::mem::size_of::<i32>()));
+
+        let tx = Transaction {
+            version: version,
+            tx_ins: tx_ins,
+            tx_outs: tx_outs,
+            lock_time: lock_time,
+        };
+        Ok(Some(tx))
+    }
+}
+
 #[derive(Debug, Clone)]
-struct TxIn {
-    previous_output: OutPoint,
-    signature_script: String,
-    sequence: u32,
+pub struct TxIn {
+    pub previous_output: OutPoint,
+    pub signature_script: String,
+    pub sequence: u32,
 }
 
 struct TxInCodec;
@@ -139,10 +173,28 @@ impl Encoder for TxInCodec {
     }
 }
 
+impl Decoder for TxInCodec {
+    type Item = TxIn;
+    type Error = Error;
+
+    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+        let previous_output = OutPointCodec.decode(src).unwrap().unwrap();
+        let signature_script = VarStrCodec.decode(src).unwrap().unwrap();
+        let sequence = LittleEndian::read_u32(&src.split_to(std::mem::size_of::<u32>()));
+
+        let tx_in = TxIn {
+            previous_output: previous_output,
+            signature_script: signature_script,
+            sequence: sequence,
+        };
+        Ok(Some(tx_in))
+    }
+}
+
 #[derive(Debug, Clone)]
-struct OutPoint {
-    hash: ArrayVec<[u8; 32]>,
-    index: u32,
+pub struct OutPoint {
+    pub hash: [u8; 32],
+    pub index: u32,
 }
 
 struct OutPointCodec;
@@ -158,10 +210,26 @@ impl Encoder for OutPointCodec {
     }
 }
 
+impl Decoder for OutPointCodec {
+    type Item = OutPoint;
+    type Error = Error;
+
+    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+        let mut hash = [0; 32];
+        hash.copy_from_slice(&src.split_to(32)[..]);
+        let index = LittleEndian::read_u32(&src.split_to(std::mem::size_of::<u32>()));
+        let out_point = OutPoint {
+            hash: hash,
+            index: index,
+        };
+        Ok(Some(out_point))
+    }
+}
+
 #[derive(Debug, Clone)]
-struct TxOut {
-    value: i64,
-    pk_script: String,
+pub struct TxOut {
+    pub value: i64,
+    pub pk_script: String,
 }
 
 struct TxOutCodec;
@@ -174,5 +242,20 @@ impl Encoder for TxOutCodec {
         dst.put_i64_le(item.value);
         VarStrCodec.encode(item.pk_script, dst).unwrap();
         Ok(())
+    }
+}
+
+impl Decoder for TxOutCodec {
+    type Item = TxOut;
+    type Error = Error;
+
+    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+        let value = LittleEndian::read_i64(&src.split_to(std::mem::size_of::<i64>()));
+        let pk_script = VarStrCodec.decode(src).unwrap().unwrap();
+        let tx_out = TxOut {
+            value: value,
+            pk_script: pk_script,
+        };
+        Ok(Some(tx_out))
     }
 }

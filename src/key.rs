@@ -1,6 +1,7 @@
 extern crate secp256k1;
 
-use secp256k1::{rand::rngs::OsRng, Message, PublicKey, Secp256k1, SecretKey, SerializedSignature};
+use rand::thread_rng;
+use secp256k1::{Message, PublicKey, Secp256k1, SecretKey, SerializedSignature};
 use std::fs;
 use std::io::Write;
 
@@ -37,6 +38,5 @@ fn save_secret_key(secret_key: &SecretKey) {
 
 fn generate_keypair() -> (SecretKey, PublicKey) {
     let secp = Secp256k1::new();
-    let mut rng = OsRng::new().unwrap();
-    secp.generate_keypair(&mut rng)
+    secp.generate_keypair(&mut thread_rng())
 }

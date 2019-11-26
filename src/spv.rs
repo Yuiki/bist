@@ -1,30 +1,44 @@
-use std::net::SocketAddr;
-
+use bytes::BytesMut;
 use dialoguer::{Input, Select};
 use futures::stream::Stream;
 use futures::sync::mpsc;
 use std::io;
 use std::io::Write;
-use std::thread;
-use tokio::codec::Decoder;
+use std::net::SocketAddr;
+use std::sync::{Arc, Mutex};
+use std::{thread, time};
+use tokio::codec::{Decoder, Encoder};
 use tokio::net::TcpStream;
-use tokio::prelude::future::Future;
-use tokio::prelude::Async;
-use tokio::prelude::Sink;
+use tokio::prelude::{future::Future, Async, Sink};
 
-use crate::address::encode_to_address;
-use crate::dns;
-use crate::hash::hash160;
+use crate::address::{decode_address, encode_to_address};
+use crate::hash::{hash160, hash256};
 use crate::key;
 use crate::message::{
     FilterloadMessage, GetBlocksMessage, GetDataMessage, Inventory, Message, MessageCodec,
     VersionMessage,
 };
 use crate::network::Network;
-use crate::transaction::Transaction;
+use crate::transaction::{Transaction, TransactionCodec, TxOut};
 
 pub struct SPV {
-    pub network: Network,
+    network: Network,
+    txs: Arc<Mutex<Vec<Transaction>>>,
+    requested_counts: Arc<Mutex<usize>>,
+    received_counts: Arc<Mutex<usize>>,
+    synced: Arc<Mutex<bool>>,
+}
+
+impl SPV {
+    pub fn new(network: Network) -> SPV {
+        SPV {
+            network: network,
+            txs: Arc::new(Mutex::new(Vec::new())),
+            requested_counts: Arc::new(Mutex::new(0)),
+            received_counts: Arc::new(Mutex::new(0)),
+            synced: Arc::new(Mutex::new(false)),
+        }
+    }
 }
 
 impl Future for SPV {
@@ -42,20 +56,23 @@ impl SPV {
     }
 
     fn start(&self) -> Result<Async<()>, ()> {
-        let peers = dns::peers(&self.network);
+        // let peers = dns::peers(&self.network);
         // let peer = peers.first().unwrap();
         let peer = &"127.0.0.1:18444".parse::<SocketAddr>().unwrap();
-        let (stdin_tx, stdin_rx) = mpsc::unbounded();
-        let tmp = stdin_tx.clone();
-        thread::spawn(|| read_stdin(tmp));
-        let stdin_rx = stdin_rx.map_err(|_| panic!());
 
-        self.connect(&peer, Box::new(stdin_rx), stdin_tx);
+        let (stdin_tx, stdin_rx) = mpsc::unbounded();
+        let stdin_tx2 = stdin_tx.clone();
+        let synced = self.synced.clone();
+        let txs = self.txs.clone();
+        thread::spawn(|| read_stdin(stdin_tx, synced, txs));
+
+        let stdin_rx = stdin_rx.map_err(|_| panic!());
+        self.sync(&peer, Box::new(stdin_rx), stdin_tx2);
 
         Ok(Async::Ready(()))
     }
 
-    fn connect(
+    fn sync(
         &self,
         addr: &SocketAddr,
         stdin: Box<dyn Stream<Item = Message, Error = io::Error> + Send>,
@@ -63,62 +80,73 @@ impl SPV {
     ) {
         let addr = addr.clone();
         let network = self.network.clone();
+        let txs = self.txs.clone();
+        let requested_counts = self.requested_counts.clone();
+        let received_counts = self.received_counts.clone();
+        let synced = self.synced.clone();
 
         let client = TcpStream::connect(&addr)
             .and_then(move |stream| {
-                // handshake
-                let version = VersionMessage::new(&addr);
                 let framed = MessageCodec { network }.framed(stream);
-                framed
-                    .send(version)
-                    .map(|framed| framed.into_future())
-                    .and_then(|future| future.map_err(|(e, _)| e))
-                    .and_then(move |(_msg, framed)| {
-                        framed
-                            .send(Message::VerAck)
-                            .map(|framed| framed.into_future())
-                            .and_then(|framed| framed.map_err(|(e, _)| e))
-                            .and_then(move |(_msg, framed)| {
-                                let (sink, stream) = framed.split();
-                                tokio::spawn(stdin.forward(sink).then(|result| {
-                                    if let Err(e) = result {
-                                        println!("failed to write to socket: {}", e)
-                                    }
-                                    Ok(())
-                                }));
-                                stream.for_each(move |msg| {
-                                    println!("{:?}", msg);
-                                    match msg {
-                                        Message::Inv(fields) => {
-                                            let filtered_invs: Vec<Inventory> = fields
-                                                .invs
-                                                .iter()
-                                                .filter(|inv| inv.inv_type == 2)
-                                                .map(|inv| Inventory {
-                                                    inv_type: 3,
-                                                    hash: inv.hash,
-                                                })
-                                                .collect();
-                                            let get_data = Message::GetData(GetDataMessage {
-                                                invs: filtered_invs,
-                                            });
-                                            stdin_tx.clone().wait().send(get_data);
-                                        }
-                                        _ => {}
-                                    }
-                                    Ok(())
+                let (sink, stream) = framed.split();
+
+                tokio::spawn(stdin.forward(sink).then(|_| Ok(())));
+
+                let version = VersionMessage::new(&addr);
+                stdin_tx.clone().wait().send(version).unwrap();
+
+                stream.for_each(move |msg| {
+                    match msg {
+                        Message::Version(_) => {
+                            stdin_tx.clone().wait().send(Message::VerAck).unwrap();
+                        }
+                        Message::Inv(fields) => {
+                            let filtered_invs: Vec<Inventory> = fields
+                                .invs
+                                .iter()
+                                .filter(|inv| inv.inv_type == 2)
+                                .map(|inv| Inventory {
+                                    inv_type: 3,
+                                    hash: inv.hash,
                                 })
-                            })
-                    })
+                                .collect();
+                            let get_data = Message::GetData(GetDataMessage {
+                                invs: filtered_invs,
+                            });
+                            stdin_tx.clone().wait().send(get_data).unwrap();
+
+                            let mut requested_counts = requested_counts.lock().unwrap();
+                            *requested_counts += fields.invs.len();
+                        }
+                        Message::MerkleBlock(_) => {
+                            let mut received_counts = received_counts.lock().unwrap();
+                            *received_counts += 1;
+
+                            let requested_counts = requested_counts.lock().unwrap();
+                            if *received_counts == *requested_counts {
+                                let mut synced = synced.lock().unwrap();
+                                *synced = true;
+                            }
+                        }
+                        Message::Tx(fields) => {
+                            let mut txs = txs.lock().unwrap();
+                            txs.push(fields);
+                        }
+                        _ => {}
+                    };
+                    Ok(())
+                })
             })
-            .map_err(|e| {
-                println!("{}", e);
-            });
+            .map_err(|_| {});
         tokio::spawn(client);
     }
 }
 
-fn read_stdin(mut tx: mpsc::UnboundedSender<Message>) {
+fn read_stdin(
+    mut tx: mpsc::UnboundedSender<Message>,
+    synced: Arc<Mutex<bool>>,
+    txs: Arc<Mutex<Vec<Transaction>>>,
+) {
     let (sk, pk) = key::read_or_generate_keys();
     let commands = ["1. Show your address", "2. Send", "3. Show your balance"];
     loop {
@@ -159,36 +187,78 @@ fn read_stdin(mut tx: mpsc::UnboundedSender<Message>) {
                 };
             }
             2 => {
-                let mut pk_bytes = Vec::new();
-                pk_bytes.write_all(&pk.serialize()).unwrap();
-                let hashed_pk = hash160(&pk_bytes);
-                let filterload = FilterloadMessage::new(hashed_pk);
-                tx = match tx.send(filterload).wait() {
-                    Ok(tx) => tx,
-                    Err(_) => break,
-                };
+                if !*synced.lock().unwrap() {
+                    let mut pk_bytes = Vec::new();
+                    pk_bytes.write_all(&pk.serialize()).unwrap();
+                    let hashed_pk = hash160(&pk_bytes);
+                    let filterload = FilterloadMessage::new(hashed_pk);
+                    tx = match tx.send(filterload).wait() {
+                        Ok(tx) => tx,
+                        Err(_) => break,
+                    };
+                    let mut blockid_bytes = hex::decode(
+                        &"3967a9ab3a05c17fa3f103c04f3fedfac6f85d42895aab4368fcb59e639c564a",
+                    )
+                    .unwrap();
+                    blockid_bytes.reverse();
+                    let mut array = [0; 32];
+                    let bytes = &blockid_bytes[..array.len()];
+                    array.copy_from_slice(bytes);
+                    let zero_hash: [u8; 32] = [
+                        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                        0, 0, 0, 0, 0, 0, 0,
+                    ];
+                    let getblocks = GetBlocksMessage {
+                        version: 70015,
+                        block_locator_hashes: vec![array],
+                        hash_stop: zero_hash,
+                    };
+                    tx = match tx.send(Message::GetBlocks(getblocks)).wait() {
+                        Ok(tx) => tx,
+                        Err(_) => break,
+                    };
+                }
 
-                let mut blockid_bytes = hex::decode(
-                    &"3967a9ab3a05c17fa3f103c04f3fedfac6f85d42895aab4368fcb59e639c564a",
-                )
-                .unwrap();
-                blockid_bytes.reverse();
-                let mut array = [0; 32];
-                let bytes = &blockid_bytes[..array.len()];
-                array.copy_from_slice(bytes);
-                let zero_hash: [u8; 32] = [
-                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                    0, 0, 0, 0, 0, 0,
-                ];
-                let getblocks = GetBlocksMessage {
-                    version: 70015,
-                    block_locator_hashes: vec![array],
-                    hash_stop: zero_hash,
-                };
-                tx = match tx.send(Message::GetBlocks(getblocks)).wait() {
-                    Ok(tx) => tx,
-                    Err(_) => break,
-                };
+                while !*synced.lock().unwrap() {
+                    thread::sleep(time::Duration::from_millis(100));
+                }
+
+                let addr = encode_to_address(&pk);
+                let pk_hash = decode_address(addr);
+                let txs = txs.lock().unwrap().clone();
+                let balance = txs
+                    .iter()
+                    .flat_map(|tx| {
+                        let filtered: Vec<&TxOut> = tx
+                            .tx_outs
+                            .iter()
+                            .filter(|out| {
+                                let mut expected = vec![118, 169, 20];
+                                expected.extend(&pk_hash);
+                                expected.extend(vec![136, 172]);
+                                let actual = hex::decode(&out.pk_script).unwrap();
+                                expected == actual
+                            })
+                            .enumerate()
+                            .filter(|(idx, _)| {
+                                let mut raw_tx = BytesMut::with_capacity(1000);
+                                TransactionCodec.encode(tx.clone(), &mut raw_tx).unwrap();
+                                let txid = hash256(&raw_tx);
+
+                                !txs.iter().any(|tx| {
+                                    tx.tx_ins.iter().any(|tx_in| {
+                                        tx_in.previous_output.hash.to_vec() == txid
+                                            && tx_in.previous_output.index == (*idx as u32)
+                                    })
+                                })
+                            })
+                            .map(|(_, out)| out)
+                            .collect();
+                        filtered
+                    })
+                    .fold(0, |acc, x| acc + x.value);
+
+                println!("You have {:?} BTC", balance / 100000000);
             }
             _ => {}
         };
