@@ -39,7 +39,7 @@ impl Transaction {
         payload.put_i32_le(1);
 
         let txhash = hash::hash256(&payload.to_vec());
-        let signature = key::sign(&txhash, &sk);
+        let signature = key::sign(&txhash.to_vec(), &sk);
         let mut buf: Vec<u8> = Vec::new();
         buf.put_u8((signature.len() as u8) + 1 /* for hash code */);
         buf.extend(&signature[..]);

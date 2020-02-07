@@ -15,11 +15,15 @@ use crate::address::{decode_address, encode_to_address};
 use crate::hash::{hash160, hash256};
 use crate::key;
 use crate::message::{
-    FilterloadMessage, GetBlocksMessage, GetDataMessage, Inventory, Message, MessageCodec,
-    VersionMessage,
+    FilterloadMessage, GetBlocksMessage, GetDataMessage, Inventory, MerkleBlockMessage, Message,
+    MessageCodec, VersionMessage,
 };
 use crate::network::Network;
 use crate::transaction::{Transaction, TransactionCodec, TxOut};
+
+static ZERO_HASH: [u8; 32] = [
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+];
 
 pub struct SPV {
     network: Network,
@@ -27,6 +31,8 @@ pub struct SPV {
     requested_counts: Arc<Mutex<usize>>,
     received_counts: Arc<Mutex<usize>>,
     synced: Arc<Mutex<bool>>,
+    latest_block_timestamp: Arc<Mutex<u32>>,
+    latest_block_hash: Arc<Mutex<[u8; 32]>>,
 }
 
 impl SPV {
@@ -37,6 +43,8 @@ impl SPV {
             requested_counts: Arc::new(Mutex::new(0)),
             received_counts: Arc::new(Mutex::new(0)),
             synced: Arc::new(Mutex::new(false)),
+            latest_block_timestamp: Arc::new(Mutex::new(0)),
+            latest_block_hash: Arc::new(Mutex::new(ZERO_HASH)),
         }
     }
 }
@@ -84,6 +92,8 @@ impl SPV {
         let requested_counts = self.requested_counts.clone();
         let received_counts = self.received_counts.clone();
         let synced = self.synced.clone();
+        let latest_block_timestamp = self.latest_block_timestamp.clone();
+        let latest_block_hash = self.latest_block_hash.clone();
 
         let client = TcpStream::connect(&addr)
             .and_then(move |stream| {
@@ -118,14 +128,55 @@ impl SPV {
                             let mut requested_counts = requested_counts.lock().unwrap();
                             *requested_counts += fields.invs.len();
                         }
-                        Message::MerkleBlock(_) => {
+                        Message::MerkleBlock(fields) => {
                             let mut received_counts = received_counts.lock().unwrap();
                             *received_counts += 1;
+
+                            let mut latest_block_timestamp = latest_block_timestamp.lock().unwrap();
+                            let mut latest_block_hash = latest_block_hash.lock().unwrap();
+                            let is_latest = fields.timestamp > *latest_block_timestamp;
+                            if is_latest {
+                                *latest_block_timestamp = fields.timestamp;
+                                *latest_block_hash = fields.id;
+                            }
+
+                            if *received_counts % 500 == 0 {
+                                let getblocks = GetBlocksMessage {
+                                    version: 70015,
+                                    block_locator_hashes: vec![*latest_block_hash],
+                                    hash_stop: ZERO_HASH,
+                                };
+
+                                stdin_tx
+                                    .clone()
+                                    .wait()
+                                    .send(Message::GetBlocks(getblocks))
+                                    .unwrap();
+                            }
 
                             let requested_counts = requested_counts.lock().unwrap();
                             if *received_counts == *requested_counts {
                                 let mut synced = synced.lock().unwrap();
                                 *synced = true;
+                            }
+
+                            let mut height = 0;
+                            while calc_tree_width(fields.total_transactions, height) > 1 {
+                                height += 1;
+                            }
+                            let mut matches: Vec<[u8; 32]> = vec![];
+                            traverse_and_extract(height, 0, &mut 0, &mut 0, &mut matches, &fields);
+                            if !matches.is_empty() {
+                                let get_data = Message::GetData(GetDataMessage {
+                                    invs: matches
+                                        .into_iter()
+                                        .map(|id| Inventory {
+                                            inv_type: 1,
+                                            hash: id,
+                                        })
+                                        .collect(),
+                                });
+                                stdin_tx.clone().wait().send(get_data).unwrap();
                             }
                         }
                         Message::Tx(fields) => {
@@ -140,6 +191,48 @@ impl SPV {
             .map_err(|_| {});
         tokio::spawn(client);
     }
+}
+
+fn traverse_and_extract(
+    height: u32,
+    pos: u32,
+    flag_used: &mut usize,
+    hash_used: &mut usize,
+    matches: &mut Vec<[u8; 32]>,
+    block: &MerkleBlockMessage,
+) -> [u8; 32] {
+    if *flag_used >= block.flags.len() {
+        return [0; 32];
+    }
+    let flag = block.flags[*flag_used];
+    *flag_used += 1;
+    if height == 0 || flag == 0 {
+        let hash = block.hashes[*hash_used];
+        *hash_used += 1;
+        if height == 0 && flag == 1 {
+            matches.push(hash);
+        }
+        hash
+    } else {
+        let left = traverse_and_extract(height - 1, pos * 2, flag_used, hash_used, matches, block);
+        let right = if calc_tree_width(block.total_transactions, height - 1) > pos * 2 + 1 {
+            traverse_and_extract(
+                height - 1,
+                pos * 2 + 1,
+                flag_used,
+                hash_used,
+                matches,
+                block,
+            )
+        } else {
+            left
+        };
+        hash256(&[left, right].concat())
+    }
+}
+
+fn calc_tree_width(transactions: u32, height: u32) -> u32 {
+    (transactions + (1 << height) - 1) >> height
 }
 
 fn read_stdin(
@@ -197,21 +290,17 @@ fn read_stdin(
                         Err(_) => break,
                     };
                     let mut blockid_bytes = hex::decode(
-                        &"3967a9ab3a05c17fa3f103c04f3fedfac6f85d42895aab4368fcb59e639c564a",
+                        &"0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206",
                     )
                     .unwrap();
                     blockid_bytes.reverse();
                     let mut array = [0; 32];
                     let bytes = &blockid_bytes[..array.len()];
                     array.copy_from_slice(bytes);
-                    let zero_hash: [u8; 32] = [
-                        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                        0, 0, 0, 0, 0, 0, 0,
-                    ];
                     let getblocks = GetBlocksMessage {
                         version: 70015,
                         block_locator_hashes: vec![array],
-                        hash_stop: zero_hash,
+                        hash_stop: ZERO_HASH,
                     };
                     tx = match tx.send(Message::GetBlocks(getblocks)).wait() {
                         Ok(tx) => tx,

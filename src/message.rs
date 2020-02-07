@@ -1,3 +1,4 @@
+use crate::hash::hash256;
 use std::io::Error;
 use std::net::SocketAddr;
 use std::time::SystemTime;
@@ -148,7 +149,7 @@ impl Decoder for MessageCodec {
             return Ok(None);
         };
         let payload_len = LittleEndian::read_u32(&src[16..20]);
-        if (src.len() as u32) < payload_len {
+        if (src.len() as u32) < 24 + payload_len {
             return Ok(None);
         };
         let _magic = src.split_to(4);
@@ -174,6 +175,7 @@ impl Decoder for MessageCodec {
                 Message::Inv(InvMessage { invs: invs })
             }
             "merkleblock" => {
+                let id = hash256(&payload[0..80]);
                 let version = LittleEndian::read_i32(&payload.split_to(std::mem::size_of::<i32>()));
                 let mut prev_block = [0; 32];
                 prev_block.copy_from_slice(&payload.split_to(32)[..]);
@@ -201,6 +203,7 @@ impl Decoder for MessageCodec {
                     })
                     .collect();
                 Message::MerkleBlock(MerkleBlockMessage {
+                    id: id,
                     version: version,
                     prev_block: prev_block,
                     merkle_root: merkle_root,
@@ -359,7 +362,9 @@ impl Encoder for InventoryCodec {
     type Error = Error;
 
     fn encode(&mut self, item: Self::Item, dst: &mut BytesMut) -> Result<(), Self::Error> {
-        dst.put_u32_le(item.inv_type);
+        let mut buf = [0 as u8; 4];
+        LittleEndian::write_u32(&mut buf, item.inv_type);
+        dst.extend(&buf);
         dst.extend(&item.hash);
 
         Ok(())
@@ -428,6 +433,7 @@ pub struct GetDataMessage {
 
 #[derive(Debug)]
 pub struct MerkleBlockMessage {
+    pub id: [u8; 32],
     pub version: i32,
     pub prev_block: [u8; 32],
     pub merkle_root: [u8; 32],
